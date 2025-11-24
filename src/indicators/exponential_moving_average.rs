@@ -28,11 +28,21 @@ impl ExponentialMovingAverage {
         if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             Err(TaError::InvalidParameter)
         } else {
-            // Convert duration to days for k calculation
-            let days = duration.as_secs() as f64 / 86400.0;
+            // Determine the unit for periods based on duration
+            // If duration is less than a day, use minutes (60s) as the unit
+            // If duration is >= 1 day, use days (86400s) as the unit
+            let unit_seconds = if duration < Duration::from_secs(86400) {
+                60.0
+            } else {
+                86400.0
+            };
+
+            // Calculate number of periods
+            let periods = duration.as_secs() as f64 / unit_seconds;
+            
             Ok(Self {
                 duration,
-                k: 2.0 / (days + 1.0),
+                k: 2.0 / (periods + 1.0),
                 window: VecDeque::new(),
                 current: 0.0,
                 is_new: true,
@@ -169,5 +179,31 @@ mod tests {
     fn test_display() {
         let ema = ExponentialMovingAverage::new(Duration::from_secs(7 * 86400)).unwrap(); // 7 days
         assert_eq!(format!("{}", ema), "EMA(7 days)");
+    }
+
+    #[test]
+    fn test_intraday_instability() {
+        // 30 minute EMA
+        // Old formula: k = 2 / (days + 1) = 2 / (0.02 + 1) = 1.96 (> 1.0, unstable)
+        // New formula: k = 2 / (periods + 1) = 2 / (30 + 1) = 0.0645 (stable)
+        let mut ema = ExponentialMovingAverage::new(Duration::from_secs(30 * 60)).unwrap();
+        let now = Utc::now();
+
+        // Feed constant value 100.0
+        ema.next((now, 100.0));
+        
+        // Step change to 110.0
+        let val_step = ema.next((now + chrono::Duration::minutes(1), 110.0));
+        
+        // With k ~ 0.0645:
+        // val = 0.0645 * 110 + (1 - 0.0645) * 100
+        // val = 7.095 + 93.55 = 100.645
+        
+        // With old buggy k ~ 1.96:
+        // val = 1.96 * 110 + (1 - 1.96) * 100
+        // val = 215.6 - 96 = 119.6 (Overshoot)
+
+        assert!(val_step < 110.0, "EMA overshot the target value! Value: {}", val_step);
+        assert!(val_step > 100.0, "EMA did not increase! Value: {}", val_step);
     }
 }
