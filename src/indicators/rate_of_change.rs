@@ -14,8 +14,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct RateOfChange {
     duration: Duration,  // Now std::time::Duration
-    #[cfg_attr(feature = "serde", serde(skip))]
-    chrono_duration: Option<chrono::Duration>, // Cached for remove_old_data performance
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
@@ -27,23 +25,20 @@ impl RateOfChange {
     pub fn new(duration: Duration) -> Result<Self> {
         // std::time::Duration can't be negative, so just check if it's zero
         if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
-            return Err(TaError::InvalidParameter);
+            Err(TaError::InvalidParameter)
+        } else {
+            Ok(Self {
+                duration,
+                window: VecDeque::new(),
+                detector: AdaptiveTimeDetector::new(duration),
+            })
         }
-        let chrono_duration = chrono::Duration::from_std(duration)
-            .map_err(|_| TaError::InvalidParameter)?;
-        Ok(Self {
-            duration,
-            chrono_duration: Some(chrono_duration),
-            window: VecDeque::new(),
-            detector: AdaptiveTimeDetector::new(duration),
-        })
     }
 
-    // Remove old data points outside the duration
+    // Add a method to remove old data points outside the duration
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        let chrono_duration = *self.chrono_duration.get_or_insert_with(|| {
-            chrono::Duration::from_std(self.duration).unwrap()
-        });
+        // Convert std::time::Duration to chrono::Duration for the subtraction
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()

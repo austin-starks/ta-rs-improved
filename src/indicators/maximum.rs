@@ -13,8 +13,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct Maximum {
     duration: Duration, // Now std::time::Duration
-    #[cfg_attr(feature = "serde", serde(skip))]
-    chrono_duration: Option<chrono::Duration>, // Cached for remove_old_data performance
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
@@ -25,18 +23,16 @@ impl Maximum {
     }
 
     pub fn new(duration: Duration) -> Result<Self> {
-        // Check for zero duration (std::time::Duration can't be negative)
+        // Change: Check for zero duration (std::time::Duration can't be negative)
         if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
-            return Err(TaError::InvalidParameter);
+            Err(TaError::InvalidParameter)
+        } else {
+            Ok(Self {
+                duration,
+                window: VecDeque::new(),
+                detector: AdaptiveTimeDetector::new(duration),
+            })
         }
-        let chrono_duration = chrono::Duration::from_std(duration)
-            .map_err(|_| TaError::InvalidParameter)?;
-        Ok(Self {
-            duration,
-            chrono_duration: Some(chrono_duration),
-            window: VecDeque::new(),
-            detector: AdaptiveTimeDetector::new(duration),
-        })
     }
 
     fn find_max_value(&self) -> f64 {
@@ -47,9 +43,8 @@ impl Maximum {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        let chrono_duration = *self.chrono_duration.get_or_insert_with(|| {
-            chrono::Duration::from_std(self.duration).unwrap()
-        });
+        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()

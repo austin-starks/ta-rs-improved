@@ -97,15 +97,14 @@ impl AdaptiveTimeDetector {
                 // - Full-day sessions (~6.5 hours): Captures morning and afternoon
 
                 // 3.4 hours = 3 hours 24 minutes = 12,240 seconds
-                // Use integer comparison to avoid Duration allocation on every call
-                const MIN_GAP_SECONDS: i64 = 3 * 3600 + 24 * 60;
+                let min_gap = chrono::Duration::seconds(3 * 3600 + 24 * 60);
 
                 if let Some(last_ts) = self.last_timestamp {
-                    let diff_secs = timestamp.timestamp() - last_ts.timestamp();
+                    let time_diff = timestamp - last_ts;
 
                     // If within 3.4 hours of the last point, replace it
                     // This handles minutely data during market hours
-                    if diff_secs > 0 && diff_secs < MIN_GAP_SECONDS {
+                    if time_diff > chrono::Duration::zero() && time_diff < min_gap {
                         // Don't update last_timestamp here - we're replacing
                         return true;
                     }
