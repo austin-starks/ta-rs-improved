@@ -30,6 +30,11 @@ pub enum DetectedFrequency {
 #[derive(Debug, Clone)]
 pub struct AdaptiveTimeDetector {
     frequency: DetectedFrequency,
+    /// Pre-computed bucket size in seconds for the `Intraday` mode. `0` for
+    /// `DailyOHLC` / `Unknown`. Hoisted out of the per-call enum match so
+    /// `should_replace` is a single integer divide on the hot path.
+    #[cfg_attr(feature = "serde", serde(default))]
+    intraday_bucket_seconds: i64,
     last_minute_bucket: i64,
     last_timestamp: Option<DateTime<Utc>>,
 }
@@ -54,8 +59,14 @@ impl AdaptiveTimeDetector {
             DetectedFrequency::DailyOHLC
         };
 
+        let intraday_bucket_seconds = match &frequency {
+            DetectedFrequency::Intraday(d) => d.as_secs() as i64,
+            _ => 0,
+        };
+
         Self {
             frequency,
+            intraday_bucket_seconds,
             last_minute_bucket: i64::MIN,
             last_timestamp: None,
         }
@@ -75,19 +86,32 @@ impl AdaptiveTimeDetector {
     /// Process a new timestamp and determine if it should replace the previous value
     /// Returns true if this is a duplicate within the same time bucket (should replace)
     /// Returns false if this is a new time period (should append)
+    #[inline]
     pub fn should_replace(&mut self, timestamp: DateTime<Utc>) -> bool {
+        // Hot path: Intraday bucketing. Hoisted out of the enum match so the
+        // common case is a single field load + integer divide. `#[inline]`
+        // lets cross-crate callers (e.g. RSI/EMA in indicator hot loops)
+        // inline this entire body, eliminating the call overhead.
+        if self.intraday_bucket_seconds > 0 {
+            let current_bucket = timestamp.timestamp() / self.intraday_bucket_seconds;
+            let should_replace = current_bucket == self.last_minute_bucket;
+            self.last_minute_bucket = current_bucket;
+            return should_replace;
+        }
+
         match &self.frequency {
-            DetectedFrequency::Intraday(bucket_duration) => {
-                // Dynamic bucketing based on bucket_duration (second or minute level)
-                let bucket_seconds = bucket_duration.as_secs() as i64;
-                let current_bucket = timestamp.timestamp() / bucket_seconds;
-
-                // Check if we're in the same bucket as last processed
+            DetectedFrequency::Intraday(_) => {
+                // Unreachable: `intraday_bucket_seconds == 0` here, but the
+                // enum still says `Intraday`. Defensively recompute via the
+                // original code path so a hand-deserialized struct missing
+                // the cached field still works.
+                let bucket_seconds = match &self.frequency {
+                    DetectedFrequency::Intraday(d) => d.as_secs() as i64,
+                    _ => 1,
+                };
+                let current_bucket = timestamp.timestamp() / bucket_seconds.max(1);
                 let should_replace = current_bucket == self.last_minute_bucket;
-
-                // Update last processed bucket
                 self.last_minute_bucket = current_bucket;
-
                 should_replace
             }
             DetectedFrequency::DailyOHLC => {
