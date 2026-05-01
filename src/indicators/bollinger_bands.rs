@@ -5,7 +5,7 @@ use std::time::Duration; // Change: Use std::time::Duration
 
 use crate::errors::Result;
 use crate::indicators::{AdaptiveTimeDetector, StandardDeviation as Sd};
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +88,8 @@ impl Next<f64> for BollingerBands {
         mean + sd * self.multiplier
     }
 }
+
+impl NextBatch<f64> for BollingerBands {}
 
 impl Reset for BollingerBands {
     fn reset(&mut self) {

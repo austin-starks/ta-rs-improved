@@ -3,8 +3,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::indicators::AdaptiveTimeDetector;
-use crate::Next;
-use crate::{errors::Result, Reset};
+use crate::{errors::Result, Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -135,6 +134,8 @@ impl Next<f64> for SimpleMovingAverage {
         }
     }
 }
+
+impl NextBatch<f64> for SimpleMovingAverage {}
 
 impl Reset for SimpleMovingAverage {
     fn reset(&mut self) {

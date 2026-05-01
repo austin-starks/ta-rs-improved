@@ -1,6 +1,6 @@
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc}; // Remove Duration from here
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,8 @@ impl Next<f64> for MaxDrawdown {
         self.calculate_max_drawdown()
     }
 }
+
+impl NextBatch<f64> for MaxDrawdown {}
 
 impl Reset for MaxDrawdown {
     fn reset(&mut self) {

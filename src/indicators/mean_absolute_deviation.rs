@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 
 const MAX_WINDOW_SIZE: usize = 500;
 const KEEP_OLDEST: usize = 10;
@@ -134,6 +134,8 @@ impl Next<f64> for MeanAbsoluteDeviation {
         }
     }
 }
+
+impl NextBatch<f64> for MeanAbsoluteDeviation {}
 
 impl Reset for MeanAbsoluteDeviation {
     fn reset(&mut self) {

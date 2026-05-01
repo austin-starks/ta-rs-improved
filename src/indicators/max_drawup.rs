@@ -4,7 +4,7 @@ use std::time::Duration; // Change: Use std::time::Duration
 
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,8 @@ impl Next<f64> for MaxDrawup {
         self.calculate_max_drawup()
     }
 }
+
+impl NextBatch<f64> for MaxDrawup {}
 
 impl Reset for MaxDrawup {
     fn reset(&mut self) {

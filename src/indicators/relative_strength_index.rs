@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::errors::Result;
 use crate::indicators::{AdaptiveTimeDetector, ExponentialMovingAverage as Ema};
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,8 @@ impl Next<f64> for RelativeStrengthIndex {
         }
     }
 }
+
+impl NextBatch<f64> for RelativeStrengthIndex {}
 
 impl Reset for RelativeStrengthIndex {
     fn reset(&mut self) {

@@ -6,6 +6,7 @@ mod helpers;
 
 pub mod errors;
 pub mod indicators;
+pub mod simd;
 
 mod traits;
 pub use crate::traits::*;

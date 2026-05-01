@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::errors::Result;
 use crate::indicators::AdaptiveTimeDetector;
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -123,6 +123,8 @@ impl Next<f64> for Minimum {
         self.min_value
     }
 }
+
+impl NextBatch<f64> for Minimum {}
 
 impl Reset for Minimum {
     fn reset(&mut self) {

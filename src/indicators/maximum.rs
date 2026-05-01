@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
-use crate::{Next, Reset};
+use crate::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -124,6 +124,8 @@ impl Next<f64> for Maximum {
         self.find_max_value()
     }
 }
+
+impl NextBatch<f64> for Maximum {}
 
 impl Reset for Maximum {
     fn reset(&mut self) {

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
-use crate::traits::{Next, Reset};
+use crate::traits::{Next, NextBatch, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -129,6 +129,8 @@ impl Next<f64> for RateOfChange {
         }
     }
 }
+
+impl NextBatch<f64> for RateOfChange {}
 
 impl Default for RateOfChange {
     fn default() -> Self {
