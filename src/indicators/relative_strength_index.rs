@@ -73,7 +73,86 @@ impl Next<f64> for RelativeStrengthIndex {
     }
 }
 
-impl NextBatch<f64> for RelativeStrengthIndex {}
+impl NextBatch<f64> for RelativeStrengthIndex {
+    /// Batched RSI: vectorized gain/loss diff + delegate to
+    /// `EMA::next_batch` (SIMD closed-form) on each. Falls back to the
+    /// scalar `next` loop if any input would trigger same-bucket
+    /// replacement on this RSI's detector — the recurrence form
+    /// doesn't handle replacements.
+    ///
+    /// Output agrees with repeated `next` calls within ~1 ULP per
+    /// element (the inner EMA SIMD has ~10 ULP drift; one of those
+    /// drifts feeds the gain track, the other feeds the loss track,
+    /// and the final RSI ratio multiplies them — so total tolerance
+    /// is wider than EMA's. Parity tests use `1e-9` relative).
+    fn next_batch(&mut self, inputs: &[(DateTime<Utc>, f64)]) -> Vec<Self::Output> {
+        if inputs.is_empty() {
+            return Vec::new();
+        }
+
+        // Probe the RSI's detector. The two inner EMAs share the same
+        // duration → same bucket size → same `should_replace` answer
+        // for any timestamp, so probing once is enough.
+        let mut probe = self.detector.clone();
+        for &(ts, _) in inputs {
+            if probe.should_replace(ts) {
+                return inputs.iter().map(|&i| self.next(i)).collect();
+            }
+        }
+
+        // Vectorizable diff loop: compute gains and losses across the
+        // batch, threading `prev_val` through.
+        let n = inputs.len();
+        let mut gain_inputs: Vec<(DateTime<Utc>, f64)> = Vec::with_capacity(n);
+        let mut loss_inputs: Vec<(DateTime<Utc>, f64)> = Vec::with_capacity(n);
+        let mut prev = self.prev_val;
+        for &(ts, value) in inputs {
+            let (gain, loss) = match prev {
+                Some(p) => {
+                    if value > p {
+                        (value - p, 0.0)
+                    } else {
+                        (0.0, p - value)
+                    }
+                }
+                None => (0.0, 0.0),
+            };
+            gain_inputs.push((ts, gain));
+            loss_inputs.push((ts, loss));
+            prev = Some(value);
+        }
+
+        // Delegate to EMA::next_batch — SIMD closed-form internally.
+        let avg_ups = self.up_ema_indicator.next_batch(&gain_inputs);
+        let avg_downs = self.down_ema_indicator.next_batch(&loss_inputs);
+
+        // Commit RSI's detector + prev_val. The EMAs already committed
+        // their own state inside `next_batch`.
+        for &(ts, _) in inputs {
+            self.detector.should_replace(ts);
+        }
+        self.prev_val = Some(inputs[n - 1].1);
+
+        // Combine into the RSI value per index.
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let avg_up = avg_ups[i];
+            let avg_down = avg_downs[i];
+            let rsi = if avg_down == 0.0 {
+                if avg_up == 0.0 {
+                    50.0
+                } else {
+                    100.0
+                }
+            } else {
+                let rs = avg_up / avg_down;
+                100.0 - (100.0 / (1.0 + rs))
+            };
+            out.push(rsi);
+        }
+        out
+    }
+}
 
 impl Reset for RelativeStrengthIndex {
     fn reset(&mut self) {
@@ -177,5 +256,96 @@ mod tests {
     fn test_display() {
         let rsi = RelativeStrengthIndex::new(Duration::from_secs(16 * 86400)).unwrap(); // 16 days
         assert_eq!(format!("{}", rsi), "RSI(16 days)");
+    }
+
+    /// SIMD `next_batch` must agree with repeated scalar `next` calls
+    /// across many sizes and durations on regular-cadence input. Tolerance
+    /// is `1e-9` relative because RSI composes two SIMD EMAs (each ~10 ULP
+    /// drift), and the final ratio multiplies them.
+    #[test]
+    fn test_next_batch_matches_next_loop() {
+        for n in [0usize, 1, 2, 4, 5, 16, 17, 100, 1000] {
+            for period_days in [1u64, 7, 14, 30, 90] {
+                let duration = Duration::from_secs(period_days * 86400);
+                let mut a = RelativeStrengthIndex::new(duration).unwrap();
+                let mut b = RelativeStrengthIndex::new(duration).unwrap();
+
+                let start = Utc::now();
+                let inputs: Vec<(DateTime<Utc>, f64)> = (0..n)
+                    .map(|i| {
+                        (
+                            start + chrono::Duration::days(i as i64),
+                            100.0 + ((i as f64) * 0.13).sin() * 10.0,
+                        )
+                    })
+                    .collect();
+
+                let scalar: Vec<f64> = inputs.iter().map(|&i| a.next(i)).collect();
+                let batch = b.next_batch(&inputs);
+
+                assert_eq!(scalar.len(), batch.len());
+                for (i, (s, v)) in scalar.iter().zip(batch.iter()).enumerate() {
+                    let diff = (s - v).abs();
+                    let tol = 1e-9 * s.abs().max(v.abs()).max(1.0);
+                    assert!(
+                        diff <= tol,
+                        "n={} period={}d idx={} scalar={} batch={} diff={}",
+                        n, period_days, i, s, v, diff
+                    );
+                }
+
+                // Internal state must agree post-batch — extending with more
+                // `next` calls should produce matching output between the
+                // two RSI instances.
+                let extra: Vec<(DateTime<Utc>, f64)> = (n..n + 5)
+                    .map(|i| {
+                        (
+                            start + chrono::Duration::days(i as i64),
+                            42.0 + (i as f64).cos(),
+                        )
+                    })
+                    .collect();
+                for &inp in &extra {
+                    let s = a.next(inp);
+                    let v = b.next(inp);
+                    let diff = (s - v).abs();
+                    let tol = 1e-9 * s.abs().max(v.abs()).max(1.0);
+                    assert!(
+                        diff <= tol,
+                        "post-batch state diverged: scalar={} batch={}",
+                        s, v
+                    );
+                }
+            }
+        }
+    }
+
+    /// When two timestamps fall in the same intraday bucket, `next_batch`
+    /// must fall back to the scalar loop. Output is bit-identical because
+    /// the fallback IS the scalar loop.
+    #[test]
+    fn test_next_batch_falls_back_on_replacement() {
+        let duration = Duration::from_secs(60 * 60); // 1-hour RSI
+        let mut a = RelativeStrengthIndex::new(duration).unwrap();
+        let mut b = RelativeStrengthIndex::new(duration).unwrap();
+
+        let start = Utc::now();
+        let inputs = vec![
+            (start, 100.0),
+            (start + chrono::Duration::minutes(1), 101.0),
+            (start + chrono::Duration::minutes(1), 102.0), // same bucket → replace
+            (start + chrono::Duration::minutes(2), 103.0),
+        ];
+
+        let scalar: Vec<f64> = inputs.iter().map(|&i| a.next(i)).collect();
+        let batch = b.next_batch(&inputs);
+
+        for (s, v) in scalar.iter().zip(batch.iter()) {
+            assert!(
+                (s - v).abs() < 1e-12,
+                "scalar={} batch={}",
+                s, v
+            );
+        }
     }
 }
