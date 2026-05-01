@@ -100,16 +100,14 @@ impl AdaptiveTimeDetector {
         }
 
         match &self.frequency {
-            DetectedFrequency::Intraday(_) => {
-                // Unreachable: `intraday_bucket_seconds == 0` here, but the
-                // enum still says `Intraday`. Defensively recompute via the
-                // original code path so a hand-deserialized struct missing
-                // the cached field still works.
-                let bucket_seconds = match &self.frequency {
-                    DetectedFrequency::Intraday(d) => d.as_secs() as i64,
-                    _ => 1,
-                };
-                let current_bucket = timestamp.timestamp() / bucket_seconds.max(1);
+            DetectedFrequency::Intraday(d) => {
+                // Reachable for structs deserialized with the legacy schema
+                // (no `intraday_bucket_seconds` field; serde fills it with 0
+                // via `#[serde(default)]`). Recompute from the enum and
+                // self-heal so subsequent calls take the fast path above.
+                let bucket_seconds = (d.as_secs() as i64).max(1);
+                self.intraday_bucket_seconds = bucket_seconds;
+                let current_bucket = timestamp.timestamp() / bucket_seconds;
                 let should_replace = current_bucket == self.last_minute_bucket;
                 self.last_minute_bucket = current_bucket;
                 should_replace
@@ -310,6 +308,43 @@ mod tests {
 
         // Should work normally after reset
         assert!(!detector.should_replace(base + chrono::Duration::days(1)));
+    }
+
+    /// A struct serialized before `intraday_bucket_seconds` existed
+    /// has no value for that field. With `#[serde(default)]` it loads
+    /// as `0`, but `frequency` still says `Intraday(60s)`. The first
+    /// `should_replace` call must self-heal — recompute the bucket
+    /// from `frequency` AND store it — so subsequent calls take the
+    /// fast path. Without self-heal, every call would re-enter the
+    /// slow fallback, defeating the whole optimization for any
+    /// persisted detector.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_default_bucket_self_heals() {
+        // Simulate a deserialized struct missing the cached field
+        let mut detector = AdaptiveTimeDetector {
+            frequency: DetectedFrequency::Intraday(Duration::from_secs(60)),
+            intraday_bucket_seconds: 0, // <-- the bug: serde default
+            last_minute_bucket: i64::MIN,
+            last_timestamp: None,
+        };
+
+        let base = Utc.ymd(2024, 1, 1).and_hms(9, 30, 0);
+
+        // First call goes through the fallback path
+        assert!(!detector.should_replace(base));
+
+        // The fallback must have written the bucket size back
+        assert_eq!(
+            detector.intraday_bucket_seconds, 60,
+            "first should_replace should self-heal intraday_bucket_seconds"
+        );
+
+        // Same minute → replace (proves the bucket comparison is correct)
+        assert!(detector.should_replace(base + chrono::Duration::seconds(30)));
+
+        // Next minute → new slot
+        assert!(!detector.should_replace(base + chrono::Duration::minutes(1)));
     }
 
     #[test]
