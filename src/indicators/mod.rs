@@ -19,6 +19,8 @@ pub use self::minimum::Minimum;
 mod maximum;
 pub use self::maximum::Maximum;
 
+mod window_aggregate;
+
 mod max_drawdown;
 pub use self::max_drawdown::MaxDrawdown;
 
