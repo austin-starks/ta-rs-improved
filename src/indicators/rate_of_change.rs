@@ -20,6 +20,11 @@ pub struct RateOfChange {
     duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
+    /// Cached `chrono::Duration` form of `duration` (computed once on first use)
+    /// so `next()` skips a `from_std` conversion every call. Not serialized;
+    /// lazily recomputed after deserialization.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    cached_window: Option<chrono::Duration>,
 }
 
 impl RateOfChange {
@@ -35,17 +40,17 @@ impl RateOfChange {
                 duration,
                 window: VecDeque::new(),
                 detector: AdaptiveTimeDetector::new(duration),
+                cached_window: None,
             })
         }
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
-        while self
-            .window
-            .front()
-            .map_or(false, |(time, _)| *time < current_time - chrono_duration)
-        {
+        let chrono_duration = *self
+            .cached_window
+            .get_or_insert_with(|| chrono::Duration::from_std(self.duration).unwrap());
+        let cutoff = current_time - chrono_duration;
+        while self.window.front().map_or(false, |(time, _)| *time < cutoff) {
             self.window.pop_front();
         }
     }

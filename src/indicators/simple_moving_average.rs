@@ -20,6 +20,11 @@ pub struct SimpleMovingAverage {
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
     detector: AdaptiveTimeDetector,
+    /// Cached `chrono::Duration` form of `duration`, computed once on first use
+    /// so `next()` avoids a `from_std` conversion every call. Not serialized;
+    /// lazily recomputed after deserialization.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    cached_window: Option<chrono::Duration>,
 }
 
 impl SimpleMovingAverage {
@@ -36,6 +41,7 @@ impl SimpleMovingAverage {
             window: VecDeque::new(),
             sum: 0.0,
             detector: AdaptiveTimeDetector::new(duration),
+            cached_window: None,
         })
     }
 
@@ -44,12 +50,11 @@ impl SimpleMovingAverage {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
-        while self
-            .window
-            .front()
-            .map_or(false, |(time, _)| *time <= current_time - chrono_duration)
-        {
+        let chrono_duration = *self
+            .cached_window
+            .get_or_insert_with(|| chrono::Duration::from_std(self.duration).unwrap());
+        let cutoff = current_time - chrono_duration;
+        while self.window.front().map_or(false, |(time, _)| *time <= cutoff) {
             if let Some((_, value)) = self.window.pop_front() {
                 self.sum -= value;
             }
