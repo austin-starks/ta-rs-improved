@@ -19,7 +19,7 @@ pub struct MaxDrawdown {
     /// so `next()` skips a `from_std` conversion every call. Not serialized;
     /// lazily recomputed after deserialization.
     #[cfg_attr(feature = "serde", serde(skip))]
-    cached_window: Option<chrono::Duration>,
+    cached_window: Option<i64>,
     // Incremental aggregate over all-but-last window element. Derived state,
     // rebuilt lazily from `window` (e.g. after deserialize) via `ensure_built`.
     #[cfg_attr(feature = "serde", serde(skip))]
@@ -67,14 +67,14 @@ impl MaxDrawdown {
     /// window element is the uncommitted tail (not in `swag`), so only mirror
     /// the pop into `swag` while more than one element remains.
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        let chrono_duration = *self
+        let dur_nanos = *self
             .cached_window
-            .get_or_insert_with(|| chrono::Duration::from_std(self.duration).unwrap());
-        let cutoff = current_time - chrono_duration;
+            .get_or_insert_with(|| self.duration.as_nanos() as i64);
+        let cutoff_nanos = current_time.timestamp_nanos_opt().unwrap_or(i64::MIN) - dur_nanos;
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time < cutoff)
+            .map_or(false, |(time, _)| time.timestamp_nanos_opt().unwrap_or(i64::MIN) < cutoff_nanos)
         {
             if self.window.len() > 1 {
                 self.swag.pop_front();

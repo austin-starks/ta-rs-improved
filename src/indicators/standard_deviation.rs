@@ -26,7 +26,7 @@ pub struct StandardDeviation {
     /// so `next()` skips a `from_std` conversion every call. Not serialized;
     /// lazily recomputed after deserialization.
     #[cfg_attr(feature = "serde", serde(skip))]
-    cached_window: Option<chrono::Duration>,
+    cached_window: Option<i64>,
 }
 
 impl StandardDeviation {
@@ -51,14 +51,14 @@ impl StandardDeviation {
     // Helper method to remove old data points
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
         // Convert std::time::Duration to chrono::Duration for the subtraction
-        let chrono_duration = *self
+        let dur_nanos = *self
             .cached_window
-            .get_or_insert_with(|| chrono::Duration::from_std(self.duration).unwrap());
-        let cutoff = current_time - chrono_duration;
+            .get_or_insert_with(|| self.duration.as_nanos() as i64);
+        let cutoff_nanos = current_time.timestamp_nanos_opt().unwrap_or(i64::MIN) - dur_nanos;
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time <= cutoff)
+            .map_or(false, |(time, _)| time.timestamp_nanos_opt().unwrap_or(i64::MIN) <= cutoff_nanos)
         {
             if let Some((_, old_value)) = self.window.pop_front() {
                 self.sum -= old_value;
